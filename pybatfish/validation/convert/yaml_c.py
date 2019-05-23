@@ -23,11 +23,14 @@ from pybatfish.validation.commands import (
     Command, InitSnapshot, SetNetwork, ShowFacts,
 )
 
-_BF_COMMANDS = 'bf_commands'
-# Supported bf_commands
+_COMMANDS = 'commands'
+# Supported commands
 _CMD_SET_NETWORK = 'set_network'
 _CMD_INIT_SNAPSHOT = 'init_snapshot'
 _CMD_SHOW_FACTS = 'show_facts'
+
+# Modifiers for commands
+_MOD_OUTPUT_DIRECTORY = '_output_directory'
 
 
 def convert_yaml(filename):
@@ -39,11 +42,11 @@ def convert_yaml(filename):
     with open(filename, 'r') as f:
         yaml_dict = safe_load(f)
 
-    cmds_in = yaml_dict.get(_BF_COMMANDS)
+    cmds_in = yaml_dict.get(_COMMANDS)
     if not cmds_in:
         raise ValueError(
             'Commands must be specified under top-level key {}'.format(
-                _BF_COMMANDS))
+                _COMMANDS))
 
     cmds_out = []  # type: List[Command]
     for cmd_dict in cmds_in:
@@ -83,7 +86,8 @@ def _extract_show_facts(dict_):
         raise TypeError(
             '{} value must be key-value pairs'.format(_CMD_SHOW_FACTS))
     nodes = dict_.get('nodes', None)
-    return ShowFacts(nodes)
+    dir_out = dict_.get(_MOD_OUTPUT_DIRECTORY, None)
+    return ShowFacts(nodes, dir_out)
 
 
 def _extract_snapshot(dict_):

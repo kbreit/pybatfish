@@ -21,13 +21,13 @@ from pybatfish.validation.commands import CommandList
 from pybatfish.validation.convert.yaml_c import convert_yaml
 
 # TODO remove this logging setup
-logging.getLogger('pybatfish.policy').setLevel(logging.INFO)
-logging.getLogger('pybatfish.policy').addHandler(logging.StreamHandler())
+logging.getLogger('pybatfish.validation').setLevel(logging.INFO)
+logging.getLogger('pybatfish.validation').addHandler(logging.StreamHandler())
 
 
 def run_yaml(name, yaml_file, session=None):
     logger = logging.getLogger(__name__)
-    logger.info('Creating command list: {}'.format(name))
+    logger.info('Creating command list named \'{}\''.format(name))
 
     if not session:
         logger.info('No session supplied, creating one')
