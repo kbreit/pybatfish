@@ -17,7 +17,7 @@ import json
 import logging
 import os
 from abc import ABCMeta, abstractmethod
-from enum import IntEnum
+from enum import Enum
 from typing import Any, Dict, List, Optional
 
 import yaml
@@ -26,18 +26,19 @@ from six import add_metaclass
 from pybatfish.client.session import Session
 
 
-class CommandExecutionStatus(IntEnum):
+class CommandExecutionStatus(str, Enum):
     """Enum for command execution status."""
-    SUCCESS = 0
-    FAILURE = 1
-    ERROR = 2
+    SUCCESS = 'Success'
+    FAILURE = 'Failure'
+    ERROR = 'Error'
 
 
 class CommandResult(object):
     """Result from execution of a command."""
 
-    def __init__(self, status, result=None, error=None):
-        # type: (CommandExecutionStatus, Optional[Any], Optional[str]) -> None
+    def __init__(self, command, status, result=None, error=None):
+        # type: (str, CommandExecutionStatus, Optional[Any], Optional[str]) -> None
+        self.command = command
         self.status = status
         self.result = result
         self.error = error
@@ -45,7 +46,8 @@ class CommandResult(object):
     def dict(self):
         # type: () -> Dict[str, Any]
         d = {
-            'status': self.status
+            'command': self.command,
+            'status': self.status,
         }
         if self.result is not None:
             d['result'] = self.result
@@ -75,7 +77,8 @@ class InitSnapshot(Command):
     def run(self, session):
         # type: (Session) -> CommandResult
         result = session.init_snapshot(self.upload, self.name, self.overwrite)
-        return CommandResult(CommandExecutionStatus.SUCCESS, result)
+        return CommandResult(self.__class__.__name__,
+                             CommandExecutionStatus.SUCCESS, result)
 
 
 class SetNetwork(Command):
@@ -88,34 +91,41 @@ class SetNetwork(Command):
     def run(self, session):
         # type: (Session) -> CommandResult
         result = session.set_network(self.name)
-        return CommandResult(CommandExecutionStatus.SUCCESS, result)
+        return CommandResult(self.__class__.__name__,
+                             CommandExecutionStatus.SUCCESS, result)
+
+
+class ShowAnswer(Command):
+    """Command to show answer to a question about a snapshot."""
+
+    def __init__(self, question, name=None, params=None):
+        self.question = question
+        self.name = name
+        self.params = params
+
+    def run(self, session):
+        logger = logging.getLogger(__name__)
+        if not hasattr(session.q, self.question):
+            raise ValueError('Question {} not found.'.format(self.question))
+        question = getattr(session.q, self.question)
+        ans = question(**self.params).answer()
+        return CommandResult(self.__class__.__name__,
+                             CommandExecutionStatus.SUCCESS,
+                             ans.frame().to_dict(orient='records'))
 
 
 class ShowFacts(Command):
-    """Command to show facts about a network."""
+    """Command to show facts about a snapshot."""
 
     def __init__(self, nodes=None, dir_out=None):
-        # type: (str) -> None
+        # type: (str, str) -> None
         self.nodes = nodes
         self.dir_out = dir_out
 
     def run(self, session):
         # type: (Session) -> CommandResult
         logger = logging.getLogger(__name__)
-        # TODO merge these using something like
-        # if nodes:
-        #     args['nodes'] = nodes
-        # func(**args)
-        if self.nodes:
-            node_properties = session.q.nodeProperties(
-                nodes=self.nodes).answer()
-            interface_properties = session.q.interfaceProperties(
-                nodes=self.nodes).answer()
-        else:
-            node_properties = session.q.nodeProperties().answer()
-            interface_properties = session.q.interfaceProperties().answer()
-
-        facts = self._process_facts(node_properties, interface_properties)
+        facts = _get_facts(session, self.nodes)
 
         if self.dir_out:
             for node in facts:
@@ -132,28 +142,125 @@ class ShowFacts(Command):
                     f.write(y)
             logger.info('Wrote facts to directory: {}'.format(self.dir_out))
 
-        return CommandResult(CommandExecutionStatus.SUCCESS, facts)
+        return CommandResult(self.__class__.__name__,
+                             CommandExecutionStatus.SUCCESS, facts)
 
-    @classmethod
-    def _process_facts(cls, node_props, iface_props):
-        """Process node and interface properties."""
-        out = {}
-        iface_dict = iface_props.frame().to_dict(orient='records')
-        for record in node_props.frame().to_dict(orient='records'):
-            # node = record.pop('Node')
-            node = record.get('Node')
 
-            # TODO Do better job of matching instead of O(m*n)
-            ifaces = []
-            for i in iface_dict:
-                if i['Interface'].hostname == node:
-                    # if i.pop('Interface').hostname == node:
-                    ifaces.append(i)
-            record['Interfaces'] = ifaces
+class ValidateFacts(Command):
+    """Command to get and check facts about a snapshot."""
 
-            # Add properties as children of node
-            out[node] = {'facts': record}
-        return out
+    def __init__(self, nodes, dir_in):
+        # type: (str) -> None
+        self.nodes = nodes
+        self.dir_in = dir_in
+
+    def run(self, session):
+        # type: (Session) -> CommandResult
+        logger = logging.getLogger(__name__)
+        facts = _get_facts(session, self.nodes)
+
+        # TODO Start test
+        all_results = []
+        all_passed = True
+
+        for node in facts:
+            results = []
+            passed = True
+            # TODO do this the right way
+            # Should dump to YAML directly instead of going thru JSON first
+            from pybatfish.util import BfJsonEncoder
+            # y_json = json.loads(json.dumps(facts[node]))
+            y_json = json.loads(BfJsonEncoder().encode(facts[node]))
+            y = yaml.safe_dump(y_json, default_flow_style=False)
+
+            logger.debug('Comparing node: {}'.format(node))
+
+            filepath = os.path.join(self.dir_in, '{}.yml'.format(node))
+            with open(filepath, 'r') as f:
+                y_expected = f.read()
+                # TODO do subdict comparison instead
+                # result = yaml.safe_load(y_expected) == y_json
+                result, messages = _is_dict_subset(
+                    yaml.safe_load(y_expected).get('facts'),
+                    y_json.get('facts'), node)
+
+            # TODO Add assert(s) to test
+            all_passed &= result
+            passed &= result
+            results.extend(messages)
+            result_text = 'Success' if result else 'Failure'
+            all_results.append({
+                'test': 'Validating facts for node {}'.format(node),
+                'assertions': results,
+                'status': result_text
+            })
+
+            message = 'Test for node \'{}\' {}'.format(node, result_text)
+            logger.info(message)
+
+        # TODO End test
+
+        status = CommandExecutionStatus.SUCCESS if all_passed else CommandExecutionStatus.FAILURE
+        return CommandResult(self.__class__.__name__,
+                             status, all_results)
+
+
+def _is_dict_subset(expected, actual, prefix):
+    """Check if expected dict is fully contained within actual dict."""
+    # TODO make recursive
+    results = []
+    passed = True
+    for k in expected:
+        if k not in actual:
+            results.append(
+                'Assertion failed for {}.{} - key is missing'.format(prefix, k))
+            passed = False
+        elif expected[k] == actual[k]:
+            results.append('Assertion passed for {}.{}'.format(prefix, k))
+        else:
+            results.append(
+                'Assertion failed for {}.{}: {} does not match expected value {}'.format(
+                    prefix, k, actual[k], expected[k]))
+            passed = False
+    return passed, results
+
+
+def _get_facts(session, nodes):
+    """Get facts for the specified nodes."""
+    # TODO merge these using something like
+    # if nodes:
+    #     args['nodes'] = nodes
+    # func(**args)
+    if nodes:
+        node_properties = session.q.nodeProperties(
+            nodes=nodes).answer()
+        interface_properties = session.q.interfaceProperties(
+            nodes=nodes).answer()
+    else:
+        node_properties = session.q.nodeProperties().answer()
+        interface_properties = session.q.interfaceProperties().answer()
+    return _process_facts(node_properties, interface_properties)
+
+
+def _process_facts(node_props, iface_props):
+    """Process node and interface properties."""
+    out = {}
+    iface_dict = iface_props.frame().to_dict(orient='records')
+    for record in node_props.frame().to_dict(orient='records'):
+        # node = record.pop('Node')
+        node = record.get('Node')
+
+        # TODO Do better job of matching instead of O(m*n)
+        ifaces = []
+        for i in iface_dict:
+            if i['Interface'].hostname == node:
+                # if i.pop('Interface').hostname == node:
+                ifaces.append(i)
+        record['Interfaces'] = ifaces
+
+        # Add properties as children of node
+        out[node] = {'facts': record}
+    return out
 
 
 class CommandList(object):

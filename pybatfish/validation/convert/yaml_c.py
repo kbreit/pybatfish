@@ -21,18 +21,23 @@ from yaml import safe_load
 
 from pybatfish.validation.commands import (
     Command, InitSnapshot, SetNetwork, ShowFacts,
-)
+    ValidateFacts, ShowAnswer)
 
 _COMMANDS = 'commands'
 # Supported commands
 _CMD_SET_NETWORK = 'set_network'
 _CMD_INIT_SNAPSHOT = 'init_snapshot'
+_CMD_SHOW_ANSWER = 'show_answer'
 _CMD_SHOW_FACTS = 'show_facts'
+_CMD_VALIDATE_FACTS = 'validate_facts'
 
 # Modifiers for commands
-_MOD_OUTPUT_DIRECTORY = '_output_directory'
+_MOD_PREFIX = '_'
+_MOD_INPUT_DIRECTORY = _MOD_PREFIX + 'input_directory'
+_MOD_OUTPUT_DIRECTORY = _MOD_PREFIX + 'output_directory'
 
 
+# TODO maybe make this take in multiple files?
 def convert_yaml(filename):
     # type: (Text) -> List[Command]
     """Convert specified file into validation commands."""
@@ -63,8 +68,12 @@ def convert_yaml(filename):
             cmds_out.append(_extract_network(cmd_params))
         elif cmd == _CMD_INIT_SNAPSHOT:
             cmds_out.append(_extract_snapshot(cmd_params))
+        elif cmd == _CMD_SHOW_ANSWER:
+            cmds_out.append(_extract_show_answer(cmd_params))
         elif cmd == _CMD_SHOW_FACTS:
             cmds_out.append(_extract_show_facts(cmd_params))
+        elif cmd == _CMD_VALIDATE_FACTS:
+            cmds_out.append(_extract_validate_facts(cmd_params))
         else:
             raise ValueError('Got unexpected command: {}'.format(cmd))
 
@@ -77,6 +86,26 @@ def _extract_network(name):
     if not isinstance(name, six.string_types):
         raise TypeError('{} value must be a string'.format(_CMD_SET_NETWORK))
     return SetNetwork(name)
+
+
+def _extract_show_answer(dict_):
+    # type: (Dict) -> ShowAnswer
+    """Extract answer-extraction from input dict."""
+    if not type(dict_) is dict:
+        raise TypeError(
+            '{} value must be key-value pairs'.format(_CMD_SHOW_ANSWER))
+    if 'question' not in dict_:
+        raise ValueError('Question name must be set via \'question\'')
+    name = None
+    if 'name' in dict_:
+        name = dict_.pop('name')
+    question = dict_.pop('question')
+    params = {}
+    for k in dict_:
+        if not k.startswith(_MOD_PREFIX):
+            params[k] = dict_[k]
+
+    return ShowAnswer(question, name, params)
 
 
 def _extract_show_facts(dict_):
@@ -103,3 +132,18 @@ def _extract_snapshot(dict_):
     overwrite = dict_.get('overwrite', False)
     name = dict_.get('name', None)
     return InitSnapshot(name, path, overwrite)
+
+
+def _extract_validate_facts(dict_):
+    # type: (Dict) -> ValidateFacts
+    """Extract fact-extractions from input dict."""
+    if not type(dict_) is dict:
+        raise TypeError(
+            '{} value must be key-value pairs'.format(_CMD_SHOW_FACTS))
+    nodes = dict_.get('nodes', None)
+
+    if _MOD_INPUT_DIRECTORY not in dict_:
+        raise ValueError('Input directory must be set via \'{}\''.format(
+            _MOD_INPUT_DIRECTORY))
+    dir_in = dict_.get(_MOD_INPUT_DIRECTORY)
+    return ValidateFacts(nodes, dir_in)
