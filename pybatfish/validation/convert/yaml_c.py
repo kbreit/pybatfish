@@ -21,7 +21,7 @@ from yaml import safe_load
 
 from pybatfish.validation.commands import (
     Command, InitSnapshot, SetNetwork, ShowFacts,
-    ValidateFacts, ShowAnswer)
+    ValidateFacts, ShowAnswer, ValidateAnswer)
 
 _COMMANDS = 'commands'
 # Supported commands
@@ -29,12 +29,15 @@ _CMD_SET_NETWORK = 'set_network'
 _CMD_INIT_SNAPSHOT = 'init_snapshot'
 _CMD_SHOW_ANSWER = 'show_answer'
 _CMD_SHOW_FACTS = 'show_facts'
+_CMD_VALIDATE_ANSWER = 'validate_answer'
 _CMD_VALIDATE_FACTS = 'validate_facts'
 
 # Modifiers for commands
 _MOD_PREFIX = '_'
 _MOD_INPUT_DIRECTORY = _MOD_PREFIX + 'input_directory'
+_MOD_INPUT_FILE = _MOD_PREFIX + 'input_file'
 _MOD_OUTPUT_DIRECTORY = _MOD_PREFIX + 'output_directory'
+_MOD_OUTPUT_FILE = _MOD_PREFIX + 'output_file'
 
 
 # TODO maybe make this take in multiple files?
@@ -74,6 +77,8 @@ def convert_yaml(filename):
             cmds_out.append(_extract_show_facts(cmd_params))
         elif cmd == _CMD_VALIDATE_FACTS:
             cmds_out.append(_extract_validate_facts(cmd_params))
+        elif cmd == _CMD_VALIDATE_ANSWER:
+            cmds_out.append(_extract_validate_answer(cmd_params))
         else:
             raise ValueError('Got unexpected command: {}'.format(cmd))
 
@@ -105,7 +110,9 @@ def _extract_show_answer(dict_):
         if not k.startswith(_MOD_PREFIX):
             params[k] = dict_[k]
 
-    return ShowAnswer(question, name, params)
+    file_out = dict_.get(_MOD_OUTPUT_FILE, None)
+
+    return ShowAnswer(question, name, params, file_out)
 
 
 def _extract_show_facts(dict_):
@@ -134,9 +141,35 @@ def _extract_snapshot(dict_):
     return InitSnapshot(name, path, overwrite)
 
 
+def _extract_validate_answer(dict_):
+    # type: (Dict) -> ValidateAnswer
+    """Extract answer-validation from input dict."""
+    if not type(dict_) is dict:
+        raise TypeError(
+            '{} value must be key-value pairs'.format(_CMD_SHOW_FACTS))
+
+    # TODO make this set of 3-4 lines into helper function
+    if _MOD_INPUT_FILE not in dict_:
+        raise ValueError('Input file must be set via \'{}\''.format(
+            _MOD_INPUT_FILE))
+    file_in = dict_.get(_MOD_INPUT_FILE)
+
+    if 'question' not in dict_:
+        raise ValueError('Question name must be set via \'question\'')
+    name = None
+    if 'name' in dict_:
+        name = dict_.pop('name')
+    question = dict_.pop('question')
+    params = {}
+    for k in dict_:
+        if not k.startswith(_MOD_PREFIX):
+            params[k] = dict_[k]
+    return ValidateAnswer(name, question, file_in, params)
+
+
 def _extract_validate_facts(dict_):
     # type: (Dict) -> ValidateFacts
-    """Extract fact-extractions from input dict."""
+    """Extract fact-validation from input dict."""
     if not type(dict_) is dict:
         raise TypeError(
             '{} value must be key-value pairs'.format(_CMD_SHOW_FACTS))

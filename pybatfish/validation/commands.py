@@ -98,20 +98,31 @@ class SetNetwork(Command):
 class ShowAnswer(Command):
     """Command to show answer to a question about a snapshot."""
 
-    def __init__(self, question, name=None, params=None):
+    def __init__(self, question, name=None, params=None, file_out=None):
+        self.file_out = file_out
         self.question = question
         self.name = name
         self.params = params
 
     def run(self, session):
         logger = logging.getLogger(__name__)
-        if not hasattr(session.q, self.question):
-            raise ValueError('Question {} not found.'.format(self.question))
-        question = getattr(session.q, self.question)
-        ans = question(**self.params).answer()
+        question = _get_question(session, self.question)
+        ans = _get_answer(question, self.params)
+        if self.file_out:
+            with open(self.file_out, 'w') as f:
+                # TODO convert this without JSON loads hackery
+                from pybatfish.util import BfJsonEncoder
+                y_json = json.loads(BfJsonEncoder().encode(ans))
+                f.write(yaml.safe_dump(y_json, default_flow_style=False))
         return CommandResult(self.__class__.__name__,
                              CommandExecutionStatus.SUCCESS,
-                             ans.frame().to_dict(orient='records'))
+                             ans)
+
+
+def _get_question(session, question):
+    if not hasattr(session.q, question):
+        raise ValueError('Question {} not found.'.format(question))
+    return getattr(session.q, question)
 
 
 class ShowFacts(Command):
@@ -129,8 +140,7 @@ class ShowFacts(Command):
 
         if self.dir_out:
             for node in facts:
-                # TODO do this the right way
-                # Should dump to YAML directly instead of going thru JSON first
+                # TODO convert this without JSON loads hackery
                 from pybatfish.util import BfJsonEncoder
                 # y_json = json.loads(json.dumps(facts[node]))
                 y_json = json.loads(BfJsonEncoder().encode(facts[node]))
@@ -144,6 +154,54 @@ class ShowFacts(Command):
 
         return CommandResult(self.__class__.__name__,
                              CommandExecutionStatus.SUCCESS, facts)
+
+
+class ValidateAnswer(Command):
+    """Command to get and check an answer about a snapshot."""
+
+    def __init__(self, name, question, file_in, params=None):
+        self.file_in = file_in
+        self.name = name
+        self.question = question
+        self.params = params
+
+    def run(self, session):
+        logger = logging.getLogger(__name__)
+
+        # TODO Start test
+        question = _get_question(session, self.question)
+        ans = _get_answer(question, self.params)
+        from pybatfish.util import BfJsonEncoder
+        y_json = json.loads(BfJsonEncoder().encode(ans))
+
+        with open(self.file_in, 'r') as f:
+            y_expected = f.read()
+
+        result, messages = _is_subset(
+            yaml.safe_load(y_expected).get('answer'),
+            y_json.get('answer'))
+
+        result_text = 'Success' if result else 'Failure'
+        message = 'Validating answer for question \'{}\' {}'.format(question,
+                                                                    result_text)
+        logger.info(message)
+
+        # TODO End test
+
+        status = CommandExecutionStatus.SUCCESS if result else CommandExecutionStatus.FAILURE
+        return CommandResult(self.__class__.__name__,
+                             status, {
+                                 'test': message,
+                                 'assertions': messages,
+                                 'status': result_text
+                             })
+
+
+def _get_answer(question, params):
+    return {
+        'answer': question(**params).answer().frame().to_dict(
+            orient='records')
+    }
 
 
 class ValidateFacts(Command):
@@ -195,7 +253,8 @@ class ValidateFacts(Command):
                 'status': result_text
             })
 
-            message = 'Test for node \'{}\' {}'.format(node, result_text)
+            message = 'Test for node \'{}\' {}'.format(node,
+                                                       result_text)
             logger.info(message)
 
         # TODO End test
@@ -205,22 +264,40 @@ class ValidateFacts(Command):
                              status, all_results)
 
 
-def _is_dict_subset(expected, actual, prefix):
+def _is_subset(expected, actual, prefix=''):
+    # TODO make this more helpful for failed assertions
+    if type(expected) != type(actual):
+        return False, 'Expected and actual are different types'
+    if type(expected) is dict:
+        return _is_dict_subset(expected, actual, prefix)
+    if type(expected) is list:
+        res = expected == actual
+        if not res:
+            return False, 'Assertion failed for {} list comparison. {} does not match the expected value {}'.format(
+                prefix, actual, expected)
+        return True, 'Assertion passed for {} list comparison'.format(prefix)
+
+
+def _is_dict_subset(expected, actual, prefix=''):
     """Check if expected dict is fully contained within actual dict."""
     # TODO make recursive
+    prefix_text = '{}.'.format(prefix) if prefix else ''
     results = []
     passed = True
     for k in expected:
         if k not in actual:
             results.append(
-                'Assertion failed for {}.{} - key is missing'.format(prefix, k))
+                'Assertion failed for {}{} - key is missing'.format(
+                    prefix_text,
+                    k))
             passed = False
         elif expected[k] == actual[k]:
-            results.append('Assertion passed for {}.{}'.format(prefix, k))
+            results.append(
+                'Assertion passed for {}{}'.format(prefix_text, k))
         else:
             results.append(
-                'Assertion failed for {}.{}: {} does not match expected value {}'.format(
-                    prefix, k, actual[k], expected[k]))
+                'Assertion failed for {}{}: {} does not match expected value {}'.format(
+                    prefix_text, k, actual[k], expected[k]))
             passed = False
     return passed, results
 
@@ -282,10 +359,11 @@ class CommandList(object):
             return cmd.run(session)
         except Exception as e:
             # TODO stop re-raising error
-            raise e
+            # raise e
             err = '{}: {}'.format(e.__class__.__name__, e)
             logger = logging.getLogger(__name__)
             logger.error(err)
             return CommandResult(
+                cmd.__class__.__name__,
                 CommandExecutionStatus.ERROR,
                 error=err)
