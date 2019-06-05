@@ -83,8 +83,26 @@ class Session(object):
         self.enable_diagnostics = True  # type: bool
 
         # Auto-load question templates
+        self.load_questions = load_questions
         if load_questions:
             self.q.load()
+
+    def dict(self):
+        # d = deepcopy(self.__dict__)
+        # Questions are associated with a Pybatfish Session object
+        # Don't want to include that for now
+        # del d['q']
+
+        # For now, just build a dict with the values we DO want
+        d = {
+            'host': self.host,
+            'port_v1': self.port_v1,
+            'port_v2': self.port_v2,
+            'ssl': self.ssl,
+            'verify_ssl_certs': self.verify_ssl_certs,
+            'load_questions': self.load_questions,
+        }
+        return d
 
     # Support old property names
     @property  # type: ignore
