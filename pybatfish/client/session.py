@@ -103,6 +103,8 @@ class Session(object):
             'ssl': self.ssl,
             'verify_ssl_certs': self.verify_ssl_certs,
             'load_questions': self.load_questions,
+            'network': self.network,
+            'snapshot': self.snapshot,
         }
         return d
 
