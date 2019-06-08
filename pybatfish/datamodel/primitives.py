@@ -342,3 +342,6 @@ class ListWrapper(FrozenList):
         result = "<br><br>".join(
             [get_html(element) for element in self])  # type: str
         return result
+
+    def __repr__(self):
+        return self.__str__()

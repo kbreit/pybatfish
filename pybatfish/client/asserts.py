@@ -18,7 +18,7 @@ All `assert_*` methods will raise an
 :py:class:`~pybatfish.util.exception.BatfishAssertException` if the assertion
 fails.
 """
-
+import collections
 import operator
 import warnings
 from typing import (Any, Dict, Iterable, Optional, TYPE_CHECKING,  # noqa: F401
@@ -90,7 +90,20 @@ def assert_num_results(answer, num, soft=False):
 def _subdict(d, keys):
     # type: (Dict, Iterable[str]) -> Dict[str, Any]
     """Helper function that retrieves a subset of a dictionary given some keys."""
-    return {k: d.get(k) for k in keys}
+    return {k: d.get(k) for k in keys if k in d}
+
+
+def _subdict_recursive(d, d_ref):
+    # type: (Dict, Dict) -> Dict[str, Any]
+    """Helper function that retrieves a subset of a dictionary that has the same keys as the reference dictionary."""
+    out = {}
+    for k in d:
+        if k in d_ref.keys():
+            if isinstance(d_ref[k], collections.Mapping):
+                out[k] = _subdict_recursive(d[k], d_ref[k])
+            else:
+                out[k] = d[k]
+    return out
 
 
 def _is_dict_match(actual, expected):
@@ -125,6 +138,25 @@ def assert_dict_match(actual, expected, soft=False):
     __tracebackhide__ = operator.methodcaller("errisinstance",
                                               BatfishAssertException)
     diff = DeepDiff(_subdict(actual, expected.keys()), expected,
+                    ignore_order=True, verbose_level=0, view='text')
+    if diff:
+        err_text = "Unexpected differences found:\n{}".format(diff)
+        return _raise_common(err_text, soft)
+    return True
+
+
+def assert_dict_match_recursive(actual, expected, soft=False):
+    # type: (Dict, Dict, bool) -> bool
+    """Assert that two dictionaries are equal. `expected` can be a subset of `actual`.
+
+    :param actual: the value tested.
+    :param expected: the expected value of a dictionary
+    :param soft: whether this assertion is soft (i.e., generates a warning but
+        not a failure)
+    """
+    __tracebackhide__ = operator.methodcaller("errisinstance",
+                                              BatfishAssertException)
+    diff = DeepDiff(_subdict_recursive(actual, expected), expected,
                     ignore_order=True, verbose_level=0, view='text')
     if diff:
         err_text = "Unexpected differences found:\n{}".format(diff)
